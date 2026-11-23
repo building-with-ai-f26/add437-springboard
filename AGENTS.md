@@ -33,7 +33,7 @@ SECURITY.md          Security audit results.
 
 ## 3b. Shipping (deploy to Render)
 1. Commit and push to `main` on GitHub.
-2. First time only: on render.com, **New → Web Service**, connect the `dj-app` repo, and set:
+2. First time only: on render.com, **New → Web Service**, connect the `building-with-ai-f26/add437-springboard` repo, and set:
    - Runtime: Python 3 · Build command: `pip install -r requirements.txt` · Start command: `python3 server.py` · Instance: Free
    - Environment variables: `OPENROUTER_API_KEY` (secret, from OpenRouter) and `OPENROUTER_MODEL=openai/gpt-4o-mini`
 3. Render redeploys automatically on every push to `main`. Watch the **Events/Logs** tab until it says "Live".
