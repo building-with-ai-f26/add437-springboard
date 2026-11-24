@@ -130,6 +130,21 @@ ol.play{list-style:none;margin:0;padding:0}
 svg text{font-family:"Share Tech Mono",monospace;font-size:11px;pointer-events:none}
 .empty{padding:28px;text-align:center;color:var(--muted)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+.ohead{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.tagbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 12px}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:999px;border:1px solid var(--accent);color:var(--ink);font-size:.82rem;background:rgba(167,123,255,.08)}
+.chip button{background:none;border:0;color:var(--muted);padding:0 2px;font-size:1rem;line-height:1}
+.tagform{display:flex;gap:6px;width:100%;margin-top:4px}.tagform input{padding:4px 8px}
+.fader{accent-color:var(--accent);padding:0;border:0;background:none}
+.rangeends{display:flex;justify-content:space-between;margin-top:-2px}
+label.check{display:flex;gap:8px;align-items:center;text-transform:none;letter-spacing:0;font-size:.92rem;color:var(--ink)}
+label.check input{width:auto}
+.chk.warn{background:none;color:var(--warn);border-color:var(--warn);cursor:pointer}
+.orow.locked{border-color:var(--accent)}
+.sugg .bd{font-size:.72rem;color:var(--muted)}
+.vibe{color:var(--accent);text-shadow:0 0 6px rgba(167,123,255,.6)}
+#wake{position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:45;background:#111114;border:1px solid var(--accent);border-radius:999px;padding:8px 16px;font-size:.9rem;box-shadow:0 6px 18px rgba(0,0,0,.6)}
 </style>
 </head>
 <body>
@@ -146,17 +161,19 @@ svg text{font-family:"Share Tech Mono",monospace;font-size:11px;pointer-events:n
     <a href="#/about" data-nav="about"><span class="led acc"></span>About</a>
   </nav>
 </aside>
+<div id="wake" hidden role="status"><span class="led acc"></span>Waking up the server… this can take up to a minute.</div>
 <main id="main"></main>
 <div id="pop" hidden role="dialog"></div>
 <button id="fab" hidden aria-label="Show Camelot wheel" aria-expanded="false" aria-controls="dock">◎</button>
 <section id="dock" hidden aria-label="Camelot wheel"><div class="dhead"><h3 style="font-size:1.05rem">Camelot wheel</h3><button class="btn small" id="dockClose">Hide</button></div><div id="dockWheel"></div><div id="dockInfo"><p class="note" style="margin:6px 0 0">Tap a key to light up where it can go. It stays open while you organize.</p></div></section>
 
 <script>
-// ---------- data helpers
+// ---------- helpers
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const uid=()=>Math.random().toString(36).slice(2,9);
 const track=(e,p)=>{try{window.posthog&&posthog.capture&&posthog.capture(e,p||{})}catch(x){}};
+const sid=t=>(t.title+"|"+t.artist).toLowerCase();
 const MUSICAL={"1A":"A♭ minor","1B":"B major","2A":"E♭ minor","2B":"F♯ major","3A":"B♭ minor","3B":"D♭ major","4A":"F minor","4B":"A♭ major","5A":"C minor","5B":"E♭ major","6A":"G minor","6B":"B♭ major","7A":"D minor","7B":"F major","8A":"A minor","8B":"C major","9A":"E minor","9B":"G major","10A":"B minor","10B":"D major","11A":"F♯ minor","11B":"A major","12A":"D♭ minor","12B":"E major"};
 const NOTE={c:0,"c#":1,db:1,d:2,"d#":3,eb:3,e:4,f:5,"f#":6,gb:6,g:7,"g#":8,ab:8,a:9,"a#":10,bb:10,b:11};
 const MINOR_NUM=[5,12,7,2,9,4,11,6,1,8,3,10], MAJOR_NUM=[8,3,10,5,12,7,2,9,4,11,6,1];
@@ -165,8 +182,7 @@ function parseKey(k){
   let m=/^(1[0-2]|[1-9])\s*([ab])$/i.exec(k); if(m) return m[1]+m[2].toUpperCase();
   m=/^([a-g])\s*([#♯b♭]?)\s*(m|min|minor|maj|major)?$/i.exec(k.replace(/\s+/g," ")); if(!m) return null;
   const n=NOTE[(m[1]+(m[2]||"").replace("♯","#").replace("♭","b")).toLowerCase()]; if(n===undefined) return null;
-  const minor=/^m(in(or)?)?$/i.test(m[3]||"");
-  return minor?MINOR_NUM[n]+"A":MAJOR_NUM[n]+"B";
+  return /^m(in(or)?)?$/i.test(m[3]||"")?MINOR_NUM[n]+"A":MAJOR_NUM[n]+"B";
 }
 const kn=k=>({n:+k.slice(0,-1),l:k.slice(-1)});
 function keyMove(a,b){
@@ -184,44 +200,95 @@ function keyMove(a,b){
   return {s:.1,type:"clash",label:"Key clash"};
 }
 const RULES={strict:{min:.8,name:"Strict Camelot"},boost:{min:.5,name:"Allow energy jumps"},loose:{min:0,name:"Anything goes"}};
-const bpmPct=(a,b)=>Math.abs(b-a)/a*100;
+// tempo match, counting half time and double time
+function bpmRel(a,b){
+  const opts=[[b,""],[b*2,"half"],[b/2,"double"]].map(([v,m])=>({pct:Math.abs(v-a)/a*100,mode:m}));
+  return opts.sort((x,y)=>x.pct-y.pct)[0];
+}
 const mixWin=(bpm,bars)=>Math.round(bars*4*60/bpm);
 function transition(p,n,rule){
-  const k=keyMove(p.key,n.key), pct=bpmPct(p.bpm,n.bpm), keyOk=k.s>=RULES[rule||"strict"].min, tempoOk=pct<=6;
+  const k=keyMove(p.key,n.key), br=bpmRel(p.bpm,n.bpm), pct=br.pct, keyOk=k.s>=RULES[rule||"strict"].min, tempoOk=pct<=6;
   let led=keyOk&&tempoOk?"green":(k.s>=.5&&pct<=8)?"amber":"red", tip, bars;
+  const ht=br.mode?` Mix it as ${br.mode} time (${n.bpm} ↔ ${p.bpm}).`:"";
   if(!tempoOk){ tip=`Tempo gap of ${pct.toFixed(1)}% is too big to blend. Loop the outro, then echo out or cut on the last beat of a phrase.`; bars=8; }
-  else if(k.type==="same"){ tip="Long blend: overlap the tracks and swap the bass on a downbeat."; bars=32; }
-  else if(k.type==="step"){ tip=`Smooth blend; this ${k.dir}. Bring the new track in on a phrase and trade the bass halfway.`; bars=32; }
-  else if(k.type==="mood"){ tip="EQ swap: cut the lows on the outgoing track and bring the new one in on a new phrase."; bars=16; }
-  else if(k.type==="boost"){ tip="Short, punchy mix on the drop for a lift. Don’t overlap the melodies for long."; bars=16; }
-  else if(k.type==="diag"){ tip="Works in a short blend. Keep the overlap brief and lean on drums."; bars=8; }
+  else if(k.type==="same"){ tip="Long blend: overlap the tracks and swap the bass on a downbeat."+ht; bars=32; }
+  else if(k.type==="step"){ tip=`Smooth blend; this ${k.dir}. Bring the new track in on a phrase and trade the bass halfway.`+ht; bars=32; }
+  else if(k.type==="mood"){ tip="EQ swap: cut the lows on the outgoing track and bring the new one in on a new phrase."+ht; bars=16; }
+  else if(k.type==="boost"){ tip="Short, punchy mix on the drop for a lift. Don’t overlap the melodies for long."+ht; bars=16; }
+  else if(k.type==="diag"){ tip="Works in a short blend. Keep the overlap brief and lean on drums."+ht; bars=8; }
   else { tip="Keys clash. Avoid overlapping melodies: echo out, use a drum break, or cut."; bars=4; }
-  return {k,pct,led,keyOk,tempoOk,tip,bars,secs:mixWin(p.bpm,bars)};
+  return {k,pct,half:br.mode,led,keyOk,tempoOk,tip,bars,secs:mixWin(p.bpm,bars)};
 }
 const hueOf=k=>k?`hsl(${(kn(k).n-1)*30} ${kn(k).l==="A"?"70%":"80%"} ${kn(k).l==="A"?"45%":"62%"})`:"#555";
+
+// ---------- vibe scoring (key, tempo, genre, mood/sound, era, energy)
+function energyTarget(curve,pos,n){ if(curve==="steady") return 3; if(curve==="wave") return [2,3,4,5,4,3][pos%6]; return 2+3*pos/Math.max(1,n-1); }
+const tagsOf=t=>new Set([...(t.moods||[]),...(t.inst||[]),t.vocals||""].filter(Boolean));
+function factors(a,b,s,energyGoal){
+  const k=keyMove(a.key,b.key).s, p=bpmRel(a.bpm,b.bpm).pct;
+  const tempo=p<=3?1:p<=6?.8:p<=10?.4:.1;
+  let genre=.5; if(a.sub&&b.sub&&a.sub===b.sub) genre=1; else if(a.genre&&b.genre) genre=a.genre===b.genre?.7:(a.sub&&b.sub&&a.sub.split(" ").some(w=>b.sub.includes(w))?.5:.15);
+  const A=tagsOf(a),B=tagsOf(b); let mood=.5; if(A.size&&B.size){ const inter=[...A].filter(x=>B.has(x)).length; mood=inter/new Set([...A,...B]).size; mood=Math.min(1,mood*1.6); }
+  const era=a.year&&b.year?Math.max(0,1-Math.abs(a.year-b.year)/20):.5;
+  const energy=energyGoal==null?.5:1-Math.abs((b.energy||3)-energyGoal)/4;
+  return {key:k,tempo,genre,mood,era,energy};
+}
+function weights(sh){
+  const v=(sh.vibe??60)/100, m=.4+1.2*v;
+  const w={key:.25,tempo:.2,genre:.2*m,mood:.2*m,era:(sh.eraLock?.25:.1)*m,energy:.05};
+  const tot=Object.values(w).reduce((x,y)=>x+y,0); for(const k in w) w[k]/=tot; return w;
+}
+function vibeScore(a,b,s,energyGoal){
+  const f=factors(a,b,s,energyGoal), w=weights(s.shape); let sc=0; for(const k in w) sc+=w[k]*f[k];
+  if(s.shape.vocals&&s.shape.vocals!=="any"&&b.vocals&&b.vocals!==s.shape.vocals) sc*=.6;
+  return {score:sc,f};
+}
+const dots=v=>"●".repeat(v>=.8?3:v>=.5?2:v>=.25?1:0).padEnd(3,"○");
+function fitReason(a,b,f,goal){
+  const r=[];
+  if(f.genre>=1) r.push(`same subgenre (${b.sub})`); else if(f.genre>=.7) r.push(`same genre (${b.genre})`);
+  if(a.year&&b.year&&f.era>=.75) r.push(`same era (${b.year} vs ${a.year})`);
+  const shared=[...tagsOf(a)].filter(x=>tagsOf(b).has(x)&&x!=="vocal"&&x!=="instrumental"); if(shared.length) r.push(`shared feel: ${shared.slice(0,3).join(", ")}`);
+  const km=keyMove(a.key,b.key); if(km.s>=.8) r.push(km.label.toLowerCase());
+  const br=bpmRel(a.bpm,b.bpm); if(br.mode) r.push(`${br.mode}-time tempo match`);
+  if(goal!=null&&f.energy>=.75) r.push(`energy ${b.energy||3} fits your curve`);
+  return r.length?r.slice(0,3).join(" · "):"";
+}
 
 // ---------- storage
 const STORE="springboard.sets.v1";
 function demo(){
-  const t=(title,artist,bpm,key,genre,energy)=>({id:uid(),title,artist,bpm,key,genre,energy});
-  return [{id:uid(),title:"Rooftop Warm-up",venue:"Sample set",date:"",vibe:"Sunset disco into house",notes:"Made-up demo tracks. Paste your own songs in Organize set.",shape:{rule:"strict",curve:"build",genre:"blend"},
-    tracks:[t("Night Shift","Velvet Arcade",120,"8A","disco",2),t("Low Tide","Mara Quill",121,"8B","disco",3),t("Glass Hours","Northline",122,"9B","house",3),t("Soft Machine","Rhea Lune",123,"9A","house",3),t("Overpass","Halden",124,"10A","house",4),t("Silver Thread","Kite & Copper",125,"10B","house",4),t("Runway Lights","Sol Vega",126,"12B","house",5)]}];
+  const t=(title,artist,bpm,key,genre,sub,year,energy,moods,inst,vocals)=>({id:uid(),title,artist,bpm,key,genre,sub,year,energy,moods,inst,vocals});
+  return [{id:uid(),title:"Rooftop Warm-up",venue:"Sample set",date:"",vibe:"Sunset disco into house",notes:"Made-up demo tracks. Paste your own songs in Organize set.",
+    tracks:[t("Night Shift","Velvet Arcade",120,"8A","disco","nu-disco",2019,2,["warm","groovy"],["strings","bass"],"vocal"),t("Low Tide","Mara Quill",121,"8B","disco","nu-disco",2020,3,["warm","sunny"],["strings","guitar"],"vocal"),t("Glass Hours","Northline",122,"9B","house","deep house",2018,3,["dreamy","warm"],["pads","piano"],"instrumental"),t("Soft Machine","Rhea Lune",123,"9A","house","deep house",2021,3,["dreamy","hypnotic"],["synth","pads"],"vocal"),t("Overpass","Halden",124,"10A","house","french house",2017,4,["groovy","euphoric"],["filtered disco","bass"],"instrumental"),t("Silver Thread","Kite & Copper",125,"10B","house","french house",2019,4,["euphoric","sunny"],["piano","strings"],"vocal"),t("Runway Lights","Sol Vega",126,"12B","house","nu-disco",2022,5,["euphoric","party"],["synth","guitar"],"vocal")]}];
 }
+function ensure(s){ s.shape=Object.assign({rule:"strict",curve:"build",genre:"blend",vibe:60,eraLock:false,vocals:"any"},s.shape||{}); s.rejected=s.rejected||[]; s.tracks=s.tracks||[]; return s; }
 let sets; try{ sets=JSON.parse(localStorage.getItem(STORE))||demo(); }catch(e){ sets=demo(); }
+sets.forEach(ensure);
 const save=()=>{try{localStorage.setItem(STORE,JSON.stringify(sets))}catch(e){}};
 const getSet=id=>sets.find(s=>s.id===id);
 
-// ---------- AI (only when running through server.py)
+// ---------- undo (per set, this visit)
+const undoStack={};
+function snap(s){ const st=undoStack[s.id]=undoStack[s.id]||[]; st.push(JSON.stringify({tracks:s.tracks,tags:s.tags,tagsEdited:s.tagsEdited,rejected:s.rejected})); if(st.length>30) st.shift(); const b=$("#undoBtn"); if(b) b.disabled=false; }
+function undo(s){ const st=undoStack[s.id]; if(!st||!st.length) return; Object.assign(s,JSON.parse(st.pop())); save(); track("undo"); organizeTab(s); }
+
+// ---------- AI (through the server)
 let aiOK=false, aiWhy="Open the app at http://localhost:8000/app/ with python3 server.py running in Terminal to use AI.";
-fetch("/api/health").then(r=>{aiOK=r.ok; if(!r.ok) aiWhy="The server is running, but no OpenRouter key was found. Put your key in the .env file, then stop (Ctrl+C) and restart python3 server.py."; route();}).catch(()=>{});
+const wakeT=setTimeout(()=>{ $("#wake").hidden=false; },2500);
+fetch("/api/health").then(r=>{aiOK=r.ok; if(!r.ok) aiWhy="The server is running, but no OpenRouter key was found. Add OPENROUTER_API_KEY, then restart the server."; route();}).catch(()=>{}).finally(()=>{ clearTimeout(wakeT); $("#wake").hidden=true; });
 async function ai(prompt,image,web){
   const r=await fetch("/api/ai",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt,image,web:!!web})});
   const d=await r.json().catch(()=>({})); if(!r.ok) throw new Error(d.error||"AI request failed");
   return Array.isArray(d.result)?d.result:[];
 }
+const low=x=>String(x||"").toLowerCase().trim();
+const arr=(x,n)=>(Array.isArray(x)?x:[]).map(low).filter(Boolean).slice(0,n);
+function profile(x){ const y=Math.round(+x.year); return {genre:low(x.genre),sub:low(x.subgenre||x.sub),year:y>=1940&&y<=2035?y:undefined,moods:arr(x.moods,4),inst:arr(x.instruments||x.inst,3),vocals:/instr/i.test(x.vocals||"")?"instrumental":/vocal/i.test(x.vocals||"")?"vocal":undefined}; }
 const cleanSong=x=>{const key=parseKey(x.camelot||x.key), bpm=Math.round(+x.bpm);
-  return (x.title&&x.artist&&key&&bpm>=50&&bpm<=200)?{id:uid(),title:String(x.title).trim(),artist:String(x.artist).trim(),bpm,key,genre:String(x.genre||"").toLowerCase().trim(),energy:Math.min(5,Math.max(1,Math.round(+x.energy)||3)),why:String(x.why||"")}:null;};
-const SONG_SCHEMA=`{"title": string, "artist": string, "bpm": number, "camelot": string like "8A", "genre": short lowercase genre, "energy": integer 1-5}`;
+  return (x.title&&x.artist&&key&&bpm>=50&&bpm<=200)?{id:uid(),title:String(x.title).trim(),artist:String(x.artist).trim(),bpm,key,energy:Math.min(5,Math.max(1,Math.round(+x.energy)||3)),why:String(x.why||""),...profile(x)}:null;};
+const PROFILE_FIELDS=`"genre": broad lowercase genre, "subgenre": specific lowercase subgenre, "year": release year, "energy": integer 1-5, "moods": up to 4 lowercase mood words, "vocals": "vocal" or "instrumental", "instruments": up to 3 lowercase signature sounds`;
+const SONG_SCHEMA=`{"title": string, "artist": string, "bpm": number, "camelot": string like "8A", ${PROFILE_FIELDS}}`;
 
 // ---------- menu
 function setMenu(open){
@@ -229,26 +296,29 @@ function setMenu(open){
   if(open){ $("#side").removeAttribute("inert"); $("#closeSide").focus(); } else { $("#side").setAttribute("inert",""); }
 }
 $("#burger").onclick=()=>setMenu(true); $("#closeSide").onclick=()=>{setMenu(false);$("#burger").focus();}; $("#scrim").onclick=()=>setMenu(false);
-document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ setMenu(false); hidePop(); }});
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape"){ setMenu(false); hidePop(); }
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==="z"&&!/INPUT|TEXTAREA/.test(e.target.tagName)){ const h=location.hash.split("/"); if(h[1]==="set"&&h[3]==="organize"&&getSet(h[2])){ e.preventDefault(); undo(getSet(h[2])); } }
+});
 
-// ---------- popovers (key / bpm help)
+// ---------- popovers
 function hidePop(){ $("#pop").hidden=true; }
-function showPop(el,html){
-  const p=$("#pop"); p.innerHTML=html+`<p style="margin:10px 0 0"><a href="#/learn">Full guide →</a></p>`; p.hidden=false;
+function showPop(el,html,noGuide){
+  const p=$("#pop"); p.innerHTML=html+(noGuide?"":`<p style="margin:10px 0 0"><a href="#/learn">Full guide →</a></p>`); p.hidden=false;
   const r=el.getBoundingClientRect(); let x=r.left+scrollX, y=r.bottom+scrollY+8;
   x=Math.min(x,scrollX+document.documentElement.clientWidth-p.offsetWidth-12); p.style.left=Math.max(12,x)+"px"; p.style.top=y+"px";
 }
 function keyHelp(k){
   const safe=Object.keys(MUSICAL).filter(x=>x!==k&&keyMove(k,x).s>=.8), boost=Object.keys(MUSICAL).filter(x=>{const m=keyMove(k,x);return m.s>=.5&&m.s<.8;});
   return `<h3><span class="key">${k}</span> ${MUSICAL[k]}</h3><p class="muted" style="margin:0">Camelot puts the 24 keys on a clock. Numbers are positions, A is minor, B is major. Neighbors mix in harmony.</p>
-  <ul><li><b>Smooth from here:</b> ${safe.map(x=>`<span class="lcd">${x}</span>`).join(", ")} (same number swaps the mood)</li><li><b>Energy jump:</b> ${boost.map(x=>`<span class="lcd">${x}</span>`).join(", ")}</li><li><b>Anything else</b> may clash in a long blend.</li></ul>`;
+  <ul><li><b>Smooth from here:</b> ${safe.map(x=>`<span class="lcd">${x}</span>`).join(", ")} (same number swaps the mood)</li><li><b>Energy jump or short blend:</b> ${boost.map(x=>`<span class="lcd">${x}</span>`).join(", ")}</li><li><b>Anything else</b> may clash in a long blend.</li></ul>`;
 }
-function bpmHelp(b){ return `<h3><span class="lcd" style="color:var(--accent)">${b} BPM</span></h3><p style="margin:0">Beats per minute. Tracks within <b>±6%</b> (about ${Math.round(b*.94)}–${Math.round(b*1.06)} BPM) can be beatmatched for a long blend. Bigger jumps need a cut, loop or echo-out. Half or double time (${Math.round(b/2)} or ${b*2}) also works.</p><p class="muted" style="margin:6px 0 0">32 bars at this tempo ≈ ${mixWin(b,32)} seconds.</p>`; }
+function bpmHelp(b){ return `<h3><span class="lcd" style="color:var(--accent)">${b} BPM</span></h3><p style="margin:0">Beats per minute. Tracks within <b>±6%</b> (about ${Math.round(b*.94)}–${Math.round(b*1.06)} BPM) can be beatmatched for a long blend. Half or double time (${Math.round(b/2)} or ${b*2}) also mixes. Bigger jumps need a cut, loop or echo-out.</p><p class="muted" style="margin:6px 0 0">32 bars at this tempo ≈ ${mixWin(b,32)} seconds.</p>`; }
 document.addEventListener("click",e=>{
   const k=e.target.closest("[data-keyhelp]"), b=e.target.closest("[data-bpmhelp]");
   if(k){ if(k.closest("#dock")){ dockKey(k.dataset.keyhelp); e.stopPropagation(); return; } showPop(k,keyHelp(k.dataset.keyhelp)); e.stopPropagation(); return; }
   if(b){ showPop(b,bpmHelp(+b.dataset.bpmhelp)); e.stopPropagation(); return; }
-  if(!e.target.closest("#pop")&&e.target.dataset.key===undefined) hidePop();
+  if(!e.target.closest("#pop")&&!e.target.closest("[data-alts]")&&e.target.dataset.key===undefined) hidePop();
 });
 const keyBtn=k=>`<button class="key" data-keyhelp="${k}" aria-label="Key ${k}, ${MUSICAL[k]}. Show key help">${k}</button>`;
 const bpmBtn=b=>`<button class="bpm" data-bpmhelp="${b}" aria-label="${b} BPM. Show tempo help">${b} BPM</button>`;
@@ -276,9 +346,24 @@ function route(){
   homePage();
 }
 
+// ---------- export / import
+function download(name,text){ const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([text],{type:"application/json"})); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }
+function exportSet(s){ download(`springboard-${(s.title||"set").replace(/[^\w-]+/g,"-").toLowerCase()}.json`,JSON.stringify({springboard:1,set:s},null,2)); track("set_exported"); }
+function importSet(file){
+  const r=new FileReader();
+  r.onload=()=>{ try{ const d=JSON.parse(r.result), src=d.set||d; if(!Array.isArray(src.tracks)) throw 0;
+      const s=ensure({id:uid(),title:String(src.title||"Imported set").slice(0,80),venue:String(src.venue||""),date:String(src.date||""),vibe:String(src.vibe||""),notes:String(src.notes||""),shape:src.shape,tags:Array.isArray(src.tags)?src.tags.map(low).slice(0,12):undefined,tagsEdited:!!src.tagsEdited,
+        tracks:src.tracks.map(t=>{ const c=cleanSong({...t,camelot:t.key}); return c&&Object.assign(c,{check:["verified","likely","you"].includes(t.check)?t.check:undefined,locked:!!t.locked}); }).filter(Boolean)});
+      sets.push(s); save(); track("set_imported",{tracks:s.tracks.length}); homePage();
+    }catch(e){ alert("That file isn’t a Springboard set."); } };
+  r.readAsText(file);
+}
+const listText=s=>s.tracks.map(t=>`${t.title} - ${t.artist}, ${t.bpm}, ${t.key}${t.genre?", "+t.genre:""}`).join("\n");
+
 // ---------- home
 function homePage(){
-  $("#main").innerHTML=`<div class="hero"><div><h1>Your sets</h1><p class="muted" style="margin:4px 0 0">Pick a set to play, or start a new one.</p></div></div>
+  $("#main").innerHTML=`<div class="hero"><div><h1>Your sets</h1><p class="muted" style="margin:4px 0 0">Pick a set to play, or start a new one.</p></div>
+    <div><button class="btn" id="importBtn">Import set</button><input type="file" id="importFile" accept=".json,application/json" hidden></div></div>
   <div class="grid">${sets.map(s=>`<article class="card">
     <button class="open" data-open="${s.id}" aria-label="Open ${esc(s.title)}">
       <div class="vinyl" style="--lbl:${hueOf(s.tracks[0]&&s.tracks[0].key)}" aria-hidden="true"></div>
@@ -287,22 +372,26 @@ function homePage(){
       ${s.vibe?`<span>${esc(s.vibe)}</span>`:""}
       <span class="lcd muted">${s.tracks.length} TRACK${s.tracks.length===1?"":"S"}</span>
     </button>
-    <div class="cardbar"><button class="link" data-dup="${s.id}">Duplicate</button><button class="link" data-del="${s.id}">Delete</button></div>
+    <div class="cardbar"><button class="link" data-dup="${s.id}">Duplicate</button><button class="link" data-exp="${s.id}">Export</button><button class="link" data-del="${s.id}">Delete</button></div>
   </article>`).join("")}
   <button class="card newcard" id="newSet">+ New set</button></div>`;
+  $("#importFile").onchange=e=>{ if(e.target.files[0]) importSet(e.target.files[0]); };
   $("#main").onclick=e=>{
-    const o=e.target.closest("[data-open]"), d=e.target.closest("[data-dup]"), x=e.target.closest("[data-del]");
+    const o=e.target.closest("[data-open]"), d=e.target.closest("[data-dup]"), x=e.target.closest("[data-del]"), ex=e.target.closest("[data-exp]");
     if(o) location.hash=`#/set/${o.dataset.open}/play`;
+    else if(e.target.id==="importBtn") $("#importFile").click();
+    else if(ex) exportSet(getSet(ex.dataset.exp));
     else if(d){ const s=getSet(d.dataset.dup); sets.push({...JSON.parse(JSON.stringify(s)),id:uid(),title:s.title+" (copy)"}); save(); homePage(); }
-    else if(x){ const s=getSet(x.dataset.del); if(confirm(`Delete "${s.title}"?`)){ sets=sets.filter(y=>y!==s); save(); homePage(); } }
-    else if(e.target.id==="newSet"){ const s={id:uid(),title:"New set",venue:"",date:"",vibe:"",notes:"",shape:{rule:"strict",curve:"build",genre:"blend"},tracks:[]}; sets.push(s); save(); track("set_created"); location.hash=`#/set/${s.id}/organize`; }
+    else if(x){ const s=getSet(x.dataset.del); if(confirm(`Delete "${s.title}"? Export it first if you might want it back.`)){ sets=sets.filter(y=>y!==s); save(); homePage(); } }
+    else if(e.target.id==="newSet"){ const s=ensure({id:uid(),title:"New set",venue:"",date:"",vibe:"",notes:"",tracks:[]}); sets.push(s); save(); track("set_created"); location.hash=`#/set/${s.id}/organize`; }
   };
 }
 
 // ---------- set page
 function setPage(s,tab){
   $("#main").innerHTML=`<a class="back" href="#/">← All sets</a>
-  <div class="hero" style="margin:0"><div><h1 id="setTitle">${esc(s.title||"Untitled set")}</h1><p class="muted" style="margin:4px 0 0">${[s.venue,s.date,s.vibe].filter(Boolean).map(esc).join(" · ")}</p></div></div>
+  <div class="hero" style="margin:0"><div><h1 id="setTitle">${esc(s.title||"Untitled set")}</h1><p class="muted" style="margin:4px 0 0">${[s.venue,s.date,s.vibe].filter(Boolean).map(esc).join(" · ")}</p></div>
+    <div class="toggle"><button class="btn small" id="expSet">Export set</button><button class="btn small" id="copyList">Copy track list</button></div></div>
   <details class="info" ${s.title==="New set"?"open":""}><summary>Edit set info</summary>
     <div class="infogrid"><div><label for="fTitle">Title</label><input id="fTitle" data-f="title" value="${esc(s.title)}"></div>
     <div><label for="fVenue">Venue or occasion</label><input id="fVenue" data-f="venue" value="${esc(s.venue)}"></div>
@@ -314,6 +403,8 @@ function setPage(s,tab){
   <div id="tabBody"></div>`;
   document.querySelectorAll("[data-f]").forEach(i=>i.oninput=()=>{ s[i.dataset.f]=i.value; save(); if(i.dataset.f==="title") $("#setTitle").textContent=i.value||"Untitled set"; });
   document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>location.hash=`#/set/${s.id}/${b.dataset.tab}`);
+  $("#expSet").onclick=()=>exportSet(s);
+  $("#copyList").onclick=async e=>{ try{ await navigator.clipboard.writeText(listText(s)); e.target.textContent="Copied ✓"; }catch(x){ prompt("Copy your track list:",listText(s)); } track("set_list_copied"); };
   tab==="play"?playTab(s):organizeTab(s);
 }
 
@@ -322,10 +413,25 @@ function playTab(s){
   const T=s.tracks;
   if(!T.length){ $("#tabBody").innerHTML=`<div class="panel empty">This set is empty. <a href="#/set/${s.id}/organize">Add songs in Organize set →</a></div>`; return; }
   const xs=T.slice(1).map((t,i)=>transition(T[i],t,s.shape.rule)), smooth=xs.filter(x=>x.led==="green").length;
-  $("#tabBody").innerHTML=`<p class="note">${T.length} tracks · ${smooth} of ${xs.length} transitions mix smoothly. Tap a key or BPM for help.</p><ol class="play">${T.map((t,i)=>{
+  $("#tabBody").innerHTML=`${tagBar(s,false)}<p class="note">${T.length} tracks · ${smooth} of ${xs.length} transitions mix smoothly. Tap a key or BPM for help.</p><ol class="play">${T.map((t,i)=>{
     const x=i>0?xs[i-1]:null;
     return (x?`<li class="xfer"><span class="led ${x.led}"></span><b>${x.led==="green"?"Smooth":x.led==="amber"?"Careful":"Risky"}: ${esc(x.k.label)}${x.tempoOk?"":", big tempo jump"}.</b> ${esc(x.tip)}<br><span class="win">Start mixing out of “${esc(T[i-1].title)}” about ${x.bars} bars (≈${x.secs}s) before its end, bringing “${esc(t.title)}” in on the first beat of its phrase.</span></li>`:"")+
-    `<li class="trk"><span class="n">${String(i+1).padStart(2,"0")}</span><span><span class="t">${esc(t.title)}</span><br><span class="a">${esc(t.artist)}${t.genre?" · "+esc(t.genre):""}</span></span><span class="meta">${bpmBtn(t.bpm)}${keyBtn(t.key)}</span></li>`; }).join("")}</ol>`;
+    `<li class="trk"><span class="n">${String(i+1).padStart(2,"0")}</span><span><span class="t">${esc(t.title)}</span><br><span class="a">${esc(t.artist)}${t.sub||t.genre?" · "+esc(t.sub||t.genre):""}${t.year?" · "+t.year:""}</span></span><span class="meta">${bpmBtn(t.bpm)}${keyBtn(t.key)}</span></li>`; }).join("")}</ol>`;
+}
+
+// ---------- set vibe tags
+function autoTags(s){
+  const T=s.tracks, count=a=>{ const m={}; a.forEach(x=>{ if(x) m[x]=(m[x]||0)+1; }); return Object.entries(m).sort((x,y)=>y[1]-x[1]).map(x=>x[0]); };
+  const ys=T.map(t=>t.year).filter(Boolean).sort((a,b)=>a-b), out=[];
+  if(ys.length){ const y=ys[Math.floor(ys.length/2)], d=y%100-y%10, part=y%10<=3?"early":y%10<=6?"mid":"late"; out.push(`${part}-${String(d).padStart(2,"0")}s`); }
+  out.push(...count(T.map(t=>t.sub||t.genre)).slice(0,2), ...count(T.flatMap(t=>t.moods||[])).slice(0,3), ...count(T.flatMap(t=>t.inst||[])).slice(0,2));
+  const v=count(T.map(t=>t.vocals)); if(v[0]) out.push(v[0]==="vocal"?"vocals":"instrumental");
+  return [...new Set(out)].slice(0,9);
+}
+const tagsFor=s=>s.tagsEdited?(s.tags||[]):autoTags(s);
+function tagBar(s,edit){
+  const tags=tagsFor(s); if(!tags.length&&!edit) return "";
+  return `<div class="tagbar">${tags.map((t,i)=>`<span class="chip">${esc(t)}${edit?` <button aria-label="Remove ${esc(t)}" data-untag="${i}">×</button>`:""}</span>`).join("")}${edit?`<form id="tagForm" class="tagform"><input id="tagIn" placeholder="add a vibe tag" aria-label="Add a vibe tag"><button class="btn small">Add</button></form>${s.tagsEdited?`<button class="link" id="tagReset">Reset to automatic</button>`:""}`:""}</div>`;
 }
 
 function organizeTab(s){
@@ -334,36 +440,59 @@ function organizeTab(s){
   <section class="panel"><h2>Add songs</h2>
     <label for="paste">Paste a list</label>
     <textarea id="paste" placeholder="Title - Artist&#10;Title - Artist, 124, 8A, house"></textarea>
-    <p class="note">One song per line. BPM, key and genre are optional${aiOK?"; the AI fills in what’s missing, then checks every song against music sites online.":". Without the local server, include BPM and key."}</p>
+    <p class="note">One song per line. BPM, key and genre are optional${aiOK?"; the AI fills in what’s missing, then checks every song against music sites online.":". Without the AI, include BPM and key."}</p>
     <button class="btn primary" id="addPaste">Add songs</button>
     <label for="shot">Or upload a playlist screenshot</label>
     <input type="file" id="shot" accept="image/*" ${aiOK?"":"disabled"}>
     ${aiOK?"":`<p class="note">${esc(aiWhy)}</p>`}
     <p class="msg" id="addMsg" aria-live="polite"></p>
   </section>
-  <section><div class="panel"><h2>Set order</h2><button class="btn small" id="verifyAll" ${aiOK&&s.tracks.length?"":"disabled"} style="margin:4px 0 8px">Check all songs online</button>
-<p class="note">Drag the ≡ handle or use the arrows. Click a key box for help, or open the floating Camelot wheel (bottom right).</p><div id="order"></div></div></section>
+  <section><div class="panel"><div class="ohead"><h2>Set order</h2><span class="toggle"><button class="btn small" id="undoBtn" ${(undoStack[s.id]||[]).length?"":"disabled"} title="Undo (Cmd/Ctrl+Z)">↶ Undo</button><button class="btn small" id="verifyAll" ${aiOK&&s.tracks.length?"":"disabled"}>Check all online</button></span></div>
+    <p class="note">Drag the ≡ handle or use the arrows. 🔒 keeps a track in its spot when you auto-order. Click a key box for help, or open the floating Camelot wheel (bottom right).</p><div id="order"></div></div></section>
   <section>
+    <div class="panel tool"><h2>Set vibe</h2><p class="note" style="margin:0 0 6px">${s.tagsEdited?"Your tags.":"Picked up from your songs."} Suggestions follow these tags.</p><div id="tagWrap">${tagBar(s,true)}</div></div>
     <div class="panel tool"><h2>Shape the set</h2><div class="knobs">
       <label for="rule">Key rule</label><select id="rule">${Object.entries(RULES).map(([k,v])=>`<option value="${k}" ${sh.rule===k?"selected":""}>${v.name}</option>`).join("")}</select>
       <label for="curve">Energy curve</label><select id="curve"><option value="build" ${sh.curve==="build"?"selected":""}>Build up</option><option value="steady" ${sh.curve==="steady"?"selected":""}>Keep it steady</option><option value="wave" ${sh.curve==="wave"?"selected":""}>Peaks and dips</option></select>
-      <label for="genreMode">Genre</label><select id="genreMode"><option value="close" ${sh.genre==="close"?"selected":""}>Stay close</option><option value="blend" ${sh.genre==="blend"?"selected":""}>Blend across genres</option></select>
-    </div><button class="btn" id="autoOrder" style="margin-top:12px;width:100%">Auto-order my set</button><p class="note">Keeps your first track as the opener.</p></div>
-    <div class="panel tool"><h2>AI next song</h2>
-      <label for="after">Suggest songs after</label><select id="after">${s.tracks.map((t,i)=>`<option value="${i}" ${i===s.tracks.length-1?"selected":""}>${i+1}. ${esc(t.title)}</option>`).join("")}</select>
+      <label for="vibeR">Vibe: <span id="vibeLbl"></span></label><input type="range" id="vibeR" min="0" max="100" value="${sh.vibe}" class="fader">
+      <div class="rangeends note"><span>Surprise me</span><span>Match closely</span></div>
+      <label class="check"><input type="checkbox" id="eraLock" ${sh.eraLock?"checked":""}> Stay in this era</label>
+      <label for="vocals">Vocals</label><select id="vocals"><option value="any" ${sh.vocals==="any"?"selected":""}>Any</option><option value="vocal" ${sh.vocals==="vocal"?"selected":""}>Prefer vocals</option><option value="instrumental" ${sh.vocals==="instrumental"?"selected":""}>Prefer instrumentals</option></select>
+    </div><button class="btn" id="autoOrder" style="margin-top:12px;width:100%">Auto-order my set</button><p class="note">Keeps your opener and any 🔒 locked tracks in place.</p></div>
+    <div class="panel tool" id="aiPanel"><h2>AI next song</h2>
+      <label for="after">Suggest songs after</label><select id="after">${afterOpts(s)}</select>
       <button class="btn primary" id="suggest" style="margin-top:10px;width:100%" ${aiOK&&s.tracks.length?"":"disabled"}>Suggest songs</button>
-      <p class="note">${aiOK?"Matches key, BPM, genre and your shape settings. Results are estimates; check them in your DJ software.":esc(aiWhy)}</p>
+      <p class="note">${aiOK?"Ranked by key, tempo, subgenre, era, mood and your shape settings. Check final picks in your DJ software.":esc(aiWhy)}</p>
       <div id="suggOut" aria-live="polite"></div></div>
   </section></div>`;
   drawOrder(s);
-
-  ["rule","curve"].forEach(id=>$("#"+id).onchange=e=>{ sh[id]=e.target.value; save(); drawOrder(s); });
-  $("#genreMode").onchange=e=>{ sh.genre=e.target.value; save(); };
-  $("#autoOrder").onclick=()=>{ autoOrder(s); save(); track("set_auto_ordered"); organizeTab(s); };
+  const vibeLbl=()=>{ $("#vibeLbl").textContent=sh.vibe>=75?"match closely":sh.vibe>=40?"balanced":"surprise me"; }; vibeLbl();
+  $("#rule").onchange=e=>{ sh.rule=e.target.value; save(); drawOrder(s); };
+  $("#curve").onchange=e=>{ sh.curve=e.target.value; save(); drawOrder(s); };
+  $("#vibeR").oninput=e=>{ sh.vibe=+e.target.value; vibeLbl(); save(); };
+  $("#vibeR").onchange=()=>drawOrder(s);
+  $("#eraLock").onchange=e=>{ sh.eraLock=e.target.checked; save(); drawOrder(s); };
+  $("#vocals").onchange=e=>{ sh.vocals=e.target.value; save(); };
+  $("#autoOrder").onclick=()=>{ snap(s); autoOrder(s); save(); track("set_auto_ordered"); organizeTab(s); };
+  $("#undoBtn").onclick=()=>undo(s);
   $("#addPaste").onclick=()=>addFromPaste(s);
   $("#shot").onchange=e=>addFromShot(s,e.target.files[0]);
-  $("#suggest").onclick=()=>suggest(s);
-  $("#verifyAll").onclick=()=>verify(s,s.tracks.filter(t=>t.check!=="verified"&&t.check!=="you"),"");
+  $("#suggest").onclick=()=>suggestAfter(s,+$("#after").value);
+  $("#verifyAll").onclick=()=>verify(s,s.tracks.filter(t=>t.check!=="verified"&&t.check!=="you"||!t.sub),"");
+  bindTags(s);
+}
+function bindTags(s){
+  const w=$("#tagWrap"); if(!w) return;
+  const redraw=()=>{ w.innerHTML=tagBar(s,true); bindTags(s); };
+  w.onclick=e=>{ const u=e.target.closest("[data-untag]"); if(u){ snap(s); const t=tagsFor(s).slice(); t.splice(+u.dataset.untag,1); s.tags=t; s.tagsEdited=true; save(); redraw(); }
+    if(e.target.id==="tagReset"){ snap(s); s.tagsEdited=false; s.tags=undefined; save(); redraw(); } };
+  const f=$("#tagForm"); if(f) f.onsubmit=e=>{ e.preventDefault(); const v=low($("#tagIn").value).slice(0,30); if(!v) return; snap(s); s.tags=[...new Set([...tagsFor(s),v])].slice(0,12); s.tagsEdited=true; save(); track("vibe_tag_added"); redraw(); };
+}
+const afterOpts=s=>s.tracks.map((t,i)=>`<option value="${i}" ${i===s.tracks.length-1?"selected":""}>${i+1}. ${esc(t.title)}</option>`).join("");
+function badgeOf(t,i){
+  const alt=t.alts&&t.alts.length?` <button class="chk warn" data-alts="${i}">⚠ sources disagree</button>`:"";
+  const b=t.check==="verified"?`<a class="chk ok" href="${esc(t.src||"#")}" target="_blank" rel="noopener" title="Checked online">✓ verified</a>`:t.check==="likely"?`<a class="chk mid" href="${esc(t.src||"#")}" target="_blank" rel="noopener" title="Sources mostly agree">✓ likely</a>`:t.check==="you"?`<span class="chk">edited by you</span>`:`<span class="chk est">estimate</span>`;
+  return b+alt;
 }
 
 function drawOrder(s){
@@ -371,22 +500,27 @@ function drawOrder(s){
   if(!T.length){ box.innerHTML=`<p class="empty">No songs yet. Add some on the left.</p>`; return; }
   box.innerHTML=T.map((t,i)=>{
     let j="";
-    if(i>0){ const x=transition(T[i-1],t,s.shape.rule), why=[];
-      if(!x.keyOk) why.push(`key jump ${T[i-1].key} → ${t.key}`); if(!x.tempoOk) why.push(`${x.pct.toFixed(1)}% BPM jump`);
-      j=why.length?`<div class="jump bad"><span class="led red"></span>Too big a ${why.join(" and ")}</div>`:`<div class="jump ok"><span class="led green"></span>${esc(x.k.label)}, mixes smoothly</div>`; }
-    return j+`<div class="orow" draggable="true" data-i="${i}"><span class="grip" aria-hidden="true">≡</span>
-      <span><b>${esc(t.title)}</b><br><span class="note">${esc(t.artist)}${t.genre?" · "+esc(t.genre):""}</span> ${keyBtn(t.key)} ${bpmBtn(t.bpm)} ${badgeOf(t)}</span>
+    if(i>0){ const p=T[i-1], x=transition(p,t,s.shape.rule), why=[], v=Math.round(vibeScore(p,t,s).score*100);
+      if(!x.keyOk) why.push(`key jump ${p.key} → ${t.key}`); if(!x.tempoOk) why.push(`${x.pct.toFixed(1)}% BPM jump`);
+      j=why.length?`<div class="jump bad"><span class="led red"></span>Too big a ${why.join(" and ")} · vibe ${v}% <button class="link" data-bridge="${i}">Find a bridge</button></div>`
+        :`<div class="jump ok"><span class="led green"></span>${esc(x.k.label)}${x.half?` (${x.half} time)`:""}, mixes smoothly · vibe ${v}%</div>`; }
+    return j+`<div class="orow${t.locked?" locked":""}" draggable="true" data-i="${i}"><span class="grip" aria-hidden="true">≡</span>
+      <span><b>${esc(t.title)}</b><br><span class="note">${esc(t.artist)}${t.sub||t.genre?" · "+esc(t.sub||t.genre):""}${t.year?" · "+t.year:""}</span> ${keyBtn(t.key)} ${bpmBtn(t.bpm)} ${badgeOf(t,i)}</span>
       <input aria-label="BPM for ${esc(t.title)}" type="number" min="50" max="200" value="${t.bpm}" data-bpm="${i}">
       <input aria-label="Key for ${esc(t.title)}" value="${t.key}" data-key="${i}">
-      <span class="acts"><button aria-label="Move up" data-mv="${i}" data-d="-1">↑</button><button aria-label="Move down" data-mv="${i}" data-d="1">↓</button><button aria-label="Remove ${esc(t.title)}" data-rm="${i}">✕</button></span></div>`;
+      <span class="acts"><button aria-label="${t.locked?"Unlock":"Lock"} ${esc(t.title)} in place" aria-pressed="${!!t.locked}" data-lock="${i}">${t.locked?"🔒":"🔓"}</button><button aria-label="Move up" data-mv="${i}" data-d="-1">↑</button><button aria-label="Move down" data-mv="${i}" data-d="1">↓</button><button aria-label="Remove ${esc(t.title)}" data-rm="${i}">✕</button></span></div>`;
   }).join("");
-  const move=(from,to)=>{ if(to<0||to>=T.length||from===to) return; T.splice(to,0,T.splice(from,1)[0]); save(); track("set_reordered"); drawOrder(s); refreshAfter(s); };
-  box.onclick=e=>{ const m=e.target.closest("[data-mv]"), r=e.target.closest("[data-rm]");
+  const refresh=()=>{ save(); drawOrder(s); const a=$("#after"); if(a){ a.innerHTML=afterOpts(s); $("#suggest").disabled=!(aiOK&&T.length); } const u=$("#undoBtn"); if(u) u.disabled=!(undoStack[s.id]||[]).length; const w=$("#tagWrap"); if(w&&!s.tagsEdited){ w.innerHTML=tagBar(s,true); bindTags(s);} };
+  const move=(from,to)=>{ if(to<0||to>=T.length||from===to) return; snap(s); T.splice(to,0,T.splice(from,1)[0]); track("set_reordered"); refresh(); };
+  box.onclick=e=>{ const m=e.target.closest("[data-mv]"), r=e.target.closest("[data-rm]"), l=e.target.closest("[data-lock]"), al=e.target.closest("[data-alts]"), br=e.target.closest("[data-bridge]");
     if(m) move(+m.dataset.mv,+m.dataset.mv+ +m.dataset.d);
-    if(r){ T.splice(+r.dataset.rm,1); save(); drawOrder(s); refreshAfter(s); } };
+    if(l){ snap(s); T[+l.dataset.lock].locked=!T[+l.dataset.lock].locked; track("track_locked"); refresh(); }
+    if(r){ snap(s); const t=T.splice(+r.dataset.rm,1)[0]; if(t.fromAI) s.rejected=[...new Set([...s.rejected,sid(t)])]; refresh(); }
+    if(al) showAlts(s,+al.dataset.alts,al);
+    if(br) bridge(s,+br.dataset.bridge); };
   box.onchange=e=>{ const b=e.target.dataset.bpm, k=e.target.dataset.key;
-    if(b!==undefined){ const v=Math.round(+e.target.value); if(v>=50&&v<=200){ T[b].bpm=v; T[b].check="you"; save(); drawOrder(s);} }
-    if(k!==undefined){ const v=parseKey(e.target.value); if(v){ T[k].key=v; T[k].check="you"; save(); drawOrder(s);} else e.target.value=T[k].key; } };
+    if(b!==undefined){ const v=Math.round(+e.target.value); if(v>=50&&v<=200){ snap(s); T[b].bpm=v; T[b].check="you"; T[b].alts=[]; track("ai_value_edited",{field:"bpm"}); refresh(); } }
+    if(k!==undefined){ const v=parseKey(e.target.value); if(v){ snap(s); T[k].key=v; T[k].check="you"; T[k].alts=[]; track("ai_value_edited",{field:"key"}); refresh(); } else e.target.value=T[k].key; } };
   box.addEventListener("focusin",e=>{ const k=e.target.dataset.key; if(k!==undefined) showPop(e.target,keyHelp(T[k].key)); });
   let dragFrom=null;
   box.ondragstart=e=>{ const r=e.target.closest(".orow"); if(!r) return; dragFrom=+r.dataset.i; r.classList.add("drag"); e.dataTransfer.effectAllowed="move"; };
@@ -394,34 +528,44 @@ function drawOrder(s){
   box.ondrop=e=>{ const r=e.target.closest(".orow"); if(!r||dragFrom===null) return; e.preventDefault(); move(dragFrom,+r.dataset.i); dragFrom=null; };
   box.ondragend=()=>{ dragFrom=null; box.querySelectorAll(".drag,.over").forEach(x=>x.classList.remove("drag","over")); };
 }
-function refreshAfter(s){ const a=$("#after"); if(!a) return; a.innerHTML=s.tracks.map((t,i)=>`<option value="${i}" ${i===s.tracks.length-1?"selected":""}>${i+1}. ${esc(t.title)}</option>`).join(""); $("#suggest").disabled=!(aiOK&&s.tracks.length); }
+function showAlts(s,i,el){
+  const t=s.tracks[i];
+  showPop(el,`<h3>Sources disagree</h3><p class="muted" style="margin:0 0 8px">Current: <span class="lcd">${t.bpm} BPM · ${t.key}</span>. Pick the one that sounds right, or type your own in the row.</p>${t.alts.map((a,n)=>`<div style="margin:6px 0"><button class="btn small" data-usealt="${n}">Use ${a.bpm} BPM · ${a.key}</button> ${a.src?`<a class="note" href="${esc(a.src)}" target="_blank" rel="noopener">source</a>`:""}</div>`).join("")}<button class="link" data-keepalt="1">Keep current</button>`,true);
+  $("#pop").onclick=e=>{ const u=e.target.closest("[data-usealt]"), k=e.target.closest("[data-keepalt]"); if(!u&&!k) return;
+    snap(s); if(u){ const a=t.alts[+u.dataset.usealt]; t.bpm=a.bpm; t.key=a.key; } t.check="you"; t.alts=[]; save(); hidePop(); $("#pop").onclick=null; drawOrder(s); };
+}
 
-function energyTarget(curve,pos,n){ if(curve==="steady") return 3; if(curve==="wave") return [2,3,4,5,4,3][pos%6]; return 2+3*pos/Math.max(1,n-1); }
+// ---------- auto-order (vibe-aware, respects locks)
 function autoOrder(s){
-  const T=s.tracks; if(T.length<3) return; const rule=RULES[s.shape.rule].min, out=[T[0]], left=T.slice(1);
-  while(left.length){ const p=out[out.length-1], pos=out.length;
-    const score=t=>{ const k=keyMove(p.key,t.key).s, pct=bpmPct(p.bpm,t.bpm);
-      return (k>=rule?2:0)+k-(pct/6)*.6+(s.shape.genre==="close"&&t.genre&&t.genre===p.genre?.4:0)-Math.abs((t.energy||3)-energyTarget(s.shape.curve,pos,T.length))*.15; };
-    left.sort((a,b)=>score(b)-score(a)); out.push(left.shift()); }
+  const T=s.tracks, n=T.length; if(n<3) return;
+  const fixed=new Map(); T.forEach((t,i)=>{ if(t.locked||i===0) fixed.set(i,t); });
+  const left=T.filter((t,i)=>!fixed.has(i)), out=[];
+  for(let pos=0;pos<n;pos++){
+    if(fixed.has(pos)){ out.push(fixed.get(pos)); continue; }
+    const p=out[pos-1], next=fixed.get(pos+1), goal=energyTarget(s.shape.curve,pos,n), min=RULES[s.shape.rule].min;
+    const score=t=>{ let v=vibeScore(p,t,s,goal).score+(keyMove(p.key,t.key).s>=min?.3:0)-(bpmRel(p.bpm,t.bpm).pct>6?.3:0);
+      if(next) v+=.5*vibeScore(t,next,s).score; return v; };
+    left.sort((a,b)=>score(b)-score(a)); out.push(left.shift());
+  }
   s.tracks=out;
 }
 
 // ---------- adding songs
-function msg(t,kind){ const m=$("#addMsg"); m.textContent=t; m.className="msg "+(kind||""); }
+function msg(t,kind){ const m=$("#addMsg"); if(!m) return; m.textContent=t; m.className="msg "+(kind||""); }
 async function addFromPaste(s){
   const lines=$("#paste").value.split("\n").map(x=>x.trim()).filter(Boolean); if(!lines.length) return msg("Paste at least one song.","err");
   const done=[], need=[];
   lines.forEach(l=>{ const m=/^(.+?)\s+[-–]\s+([^,]+?)(?:\s*,\s*(\d+(?:\.\d+)?))?(?:\s*,\s*([^,]+?))?(?:\s*,\s*(.+))?$/.exec(l);
     if(!m) return need.push(l); const bpm=m[3]?Math.round(+m[3]):0, key=parseKey(m[4]);
-    if(bpm>=50&&bpm<=200&&key) done.push({id:uid(),title:m[1].trim(),artist:m[2].trim(),bpm,key,genre:(m[5]||"").toLowerCase().trim(),energy:3}); else need.push(l); });
+    if(bpm>=50&&bpm<=200&&key) done.push({id:uid(),title:m[1].trim(),artist:m[2].trim(),bpm,key,genre:low(m[5]),energy:3,moods:[],inst:[]}); else need.push(l); });
   let extra=[];
   if(need.length){
-    if(!aiOK){ s.tracks.push(...done); save(); drawOrder(s); refreshAfter(s); return msg(`Added ${done.length}. ${need.length} line(s) need BPM and key, like “Title - Artist, 124, 8A”.`,"err"); }
+    if(!aiOK){ if(done.length){ snap(s); s.tracks.push(...done); save(); drawOrder(s); } return msg(`Added ${done.length}. ${need.length} line(s) need BPM and key, like “Title - Artist, 124, 8A”.`,"err"); }
     msg("Asking the AI for BPM, key and genre…");
-    try{ extra=(await ai(`A DJ pasted these songs (one per line, usually "Title - Artist"):\n${need.join("\n")}\nFor each real song, give your best estimate of its BPM, Camelot key, genre and energy. Skip lines that aren't songs. Reply with only a JSON array; each item: ${SONG_SCHEMA}.`)).map(cleanSong).filter(Boolean); }
+    try{ extra=(await ai(`A DJ pasted these songs (one per line, usually "Title - Artist"):\n${need.join("\n")}\nFor each real song, give your best estimate of its details. Skip lines that aren't songs. Reply with only a JSON array; each item: ${SONG_SCHEMA}.`)).map(cleanSong).filter(Boolean); }
     catch(e){ return msg("Couldn’t reach the AI: "+e.message,"err"); }
   }
-  const all=done.concat(extra); s.tracks.push(...all); save(); $("#paste").value=""; drawOrder(s); refreshAfter(s);
+  const all=done.concat(extra); snap(s); s.tracks.push(...all); save(); $("#paste").value=""; drawOrder(s);
   track("songs_added",{count:all.length,via:"paste",ai:extra.length});
   msg(`Added ${all.length} song${all.length===1?"":"s"}.`,"ok"); verify(s,all,`Added ${all.length}.`);
 }
@@ -431,62 +575,102 @@ function shrink(file){ return new Promise((res,rej)=>{ const img=new Image(), ur
 async function addFromShot(s,file){
   if(!file) return; msg("Reading your screenshot…");
   try{ const img=await shrink(file);
-    const list=(await ai(`This is a screenshot of a music playlist. List every song you can read in it, top to bottom. For each, give the title, artist, and your best estimate of BPM, Camelot key, genre and energy. Reply with only a JSON array; each item: ${SONG_SCHEMA}.`,img)).map(cleanSong).filter(Boolean);
-    s.tracks.push(...list); save(); drawOrder(s); refreshAfter(s); track("songs_added",{count:list.length,via:"screenshot"});
+    const list=(await ai(`This is a screenshot of a music playlist. List every song you can read in it, top to bottom, with your best estimate of its details. Reply with only a JSON array; each item: ${SONG_SCHEMA}.`,img)).map(cleanSong).filter(Boolean);
+    if(list.length){ snap(s); s.tracks.push(...list); save(); drawOrder(s); }
+    track("songs_added",{count:list.length,via:"screenshot"});
     if(list.length) verify(s,list,`Added ${list.length} from the screenshot.`); else msg("Couldn’t read any songs. Try a clearer or closer screenshot.","err");
   }catch(e){ msg("Couldn’t read the screenshot: "+e.message,"err"); }
   $("#shot").value="";
 }
 
-// ---------- web verification
+// ---------- web verification (with disagreements and vibe profile)
 async function verify(s,list,label){
   if(!aiOK||!list.length) return;
-  let ok=0, changed=0;
+  let ok=0, changed=0, split=0;
   for(let b=0;b<list.length;b+=6){
     const batch=list.slice(b,b+6);
-    msg(`${label} Checking BPM, key and genre online… (${Math.min(b+6,list.length)}/${list.length})`);
+    msg(`${label} Checking BPM, key, genre and era online… (${Math.min(b+6,list.length)}/${list.length})`);
     try{
-      const res=await ai(`Search the web to verify each song's tempo, musical key and genre. Prefer music-data sites such as Tunebat, SongBPM, GetSongBPM, Musicstax or Beatport.
+      const res=await ai(`Search the web to verify each song's tempo, musical key and style. Prefer music-data sites such as Tunebat, SongBPM, GetSongBPM, Musicstax, Beatport or Discogs.
 ${batch.map((t,i)=>`${i}. "${t.title}" by ${t.artist} (current guess: ${t.bpm} BPM, ${t.key})`).join("\n")}
-Convert the key to Camelot notation (e.g. A minor = 8A). If sources disagree, use the value most sources agree on and set confidence "medium". If you can't find the song, set confidence "low" and keep the current guess.
-Reply with only a JSON array, one item per song in the same order: {"i": number, "bpm": number, "camelot": string, "genre": short lowercase genre, "source": URL you used, "confidence": "high"|"medium"|"low"}.`,null,true);
-      res.forEach(r=>{ const t=batch[+r.i]; if(!t) return; const key=parseKey(r.camelot), bpm=Math.round(+r.bpm);
+Convert keys to Camelot notation (e.g. A minor = 8A). If credible sources disagree on BPM or key, give the value most sources agree on and list the other values in "alternatives". If you can't find the song, set confidence "low" and keep the current guess.
+Reply with only a JSON array, one item per song in the same order: {"i": number, "bpm": number, "camelot": string, ${PROFILE_FIELDS}, "source": URL you used, "confidence": "high"|"medium"|"low", "alternatives": [{"bpm": number, "camelot": string, "source": URL}]}.`,null,true);
+      res.forEach(r=>{ const t=batch[+r.i]; if(!t) return; const key=parseKey(r.camelot), bpm=Math.round(+r.bpm), p=profile(r);
+        for(const f of ["genre","sub","year","vocals"]) if(p[f]) t[f]=p[f];
+        if(p.moods.length) t.moods=p.moods; if(p.inst.length) t.inst=p.inst; if(+r.energy) t.energy=Math.min(5,Math.max(1,Math.round(+r.energy)));
         if(r.confidence==="low"||!key||!(bpm>=50&&bpm<=200)){ t.check="unverified"; return; }
         if(key!==t.key||bpm!==t.bpm) changed++;
-        t.key=key; t.bpm=bpm; if(r.genre) t.genre=String(r.genre).toLowerCase(); t.check=r.confidence==="high"?"verified":"likely"; t.src=/^https?:\/\//.test(r.source||"")?r.source:""; ok++; });
+        t.key=key; t.bpm=bpm; t.check=r.confidence==="high"?"verified":"likely"; t.src=/^https?:\/\//.test(r.source||"")?r.source:"";
+        t.alts=(Array.isArray(r.alternatives)?r.alternatives:[]).map(a=>({bpm:Math.round(+a.bpm),key:parseKey(a.camelot),src:/^https?:\/\//.test(a.source||"")?a.source:""})).filter(a=>a.key&&a.bpm>=50&&a.bpm<=200&&(a.key!==key||a.bpm!==bpm)).slice(0,3);
+        if(t.alts.length) split++; ok++; });
     }catch(e){ msg("Couldn’t check online: "+e.message,"err"); save(); drawOrder(s); return; }
-    save(); drawOrder(s);
+    save(); if($("#order")) drawOrder(s);
   }
-  track("songs_verified",{count:list.length,verified:ok,changed});
-  msg(`${label} Checked ${list.length} online: ${ok} confirmed${changed?`, ${changed} corrected`:""}${list.length-ok?`, ${list.length-ok} not found (marked “estimate”)`:""}.`,"ok");
-}
-const badgeOf=t=>t.check==="verified"?`<a class="chk ok" href="${esc(t.src||"#")}" target="_blank" rel="noopener" title="Checked online">✓ verified</a>`:t.check==="likely"?`<a class="chk mid" href="${esc(t.src||"#")}" target="_blank" rel="noopener" title="Sources mostly agree">✓ likely</a>`:t.check==="you"?`<span class="chk">edited by you</span>`:`<span class="chk est">estimate</span>`;
-
-// ---------- AI next song
-async function suggest(s){
-  const i=+$("#after").value, t=s.tracks[i]; if(!t) return;
-  const out=$("#suggOut"), btn=$("#suggest"), min=RULES[s.shape.rule].min;
-  const keys=Object.keys(MUSICAL).filter(k=>keyMove(t.key,k).s>=Math.max(min,.5));
-  const genres=[...new Set(s.tracks.map(x=>x.genre).filter(Boolean))], target=Math.round(energyTarget(s.shape.curve,i+1,Math.max(s.tracks.length,i+2)));
-  btn.disabled=true; btn.textContent="Thinking…"; out.innerHTML=`<p class="note">This can take up to a minute.</p>`;
-  track("ai_suggest_clicked");
-  try{
-    const have=new Set(s.tracks.map(x=>(x.title+"|"+x.artist).toLowerCase()));
-    const list=(await ai(`You help a DJ pick the next song. Current track: "${t.title}" by ${t.artist}, ${t.bpm} BPM, Camelot ${t.key}, genre ${t.genre||"unknown"}, energy ${t.energy||3}/5.
-Suggest up to 6 real, released songs with Camelot key in [${keys.join(", ")}], tempo ${Math.round(t.bpm*.94)}-${Math.round(t.bpm*1.06)} BPM, energy around ${target}/5.
-${s.shape.genre==="close"?`Stay within these genres: ${genres.join(", ")||t.genre||"the same genre"}.`:`Related genres are welcome; the set so far includes ${genres.join(", ")||"various"}.`}
-Do not suggest any of: ${[...have].join("; ")}. Only include songs whose key and tempo you know well.
-Reply with only a JSON array; each item: ${SONG_SCHEMA.slice(0,-1)}, "why": one short sentence on why it fits}.`)).map(cleanSong).filter(x=>x&&!have.has((x.title+"|"+x.artist).toLowerCase()));
-    track("ai_tracks_found",{count:list.length});
-    out.innerHTML=list.length?list.map((x,n)=>`<div class="sugg"><span><b>${esc(x.title)}</b> · ${esc(x.artist)}</span><span>${bpmBtn(x.bpm)} ${keyBtn(x.key)} <span class="note">${esc(x.genre)}</span></span><span class="note">${esc(x.why)}</span><button class="btn small" data-addsugg="${n}">Add after #${i+1}</button></div>`).join(""):`<p class="note">No confident matches. Try “Allow energy jumps” or “Blend across genres.”</p>`;
-    out.onclick=e=>{ const b=e.target.closest("[data-addsugg]"); if(!b) return; s.tracks.splice(i+1,0,list[+b.dataset.addsugg]); save(); track("ai_song_added"); b.replaceWith(Object.assign(document.createElement("span"),{className:"note",textContent:"Added ✓"})); drawOrder(s); refreshAfter(s); };
-  }catch(e){ out.innerHTML=`<p class="msg err">Couldn’t reach the AI: ${esc(e.message)}</p>`; }
-  btn.disabled=false; btn.textContent="Suggest songs";
+  track("songs_verified",{count:list.length,verified:ok,changed,disagree:split});
+  msg(`${label} Checked ${list.length} online: ${ok} confirmed${changed?`, ${changed} corrected`:""}${split?`, ${split} where sources disagree (tap ⚠ to choose)`:""}${list.length-ok?`, ${list.length-ok} not found (marked “estimate”)`:""}.`,"ok");
+  const w=$("#tagWrap"); if(w&&!s.tagsEdited){ w.innerHTML=tagBar(s,true); bindTags(s); }
 }
 
-// ---------- learn
+// ---------- AI suggestions (next song and bridges), re-ranked by vibe score
+function prefsText(s,anchor){
+  const sh=s.shape, tags=tagsFor(s), out=[];
+  if(tags.length) out.push(`The set's vibe: ${tags.join(", ")}.`);
+  out.push(sh.vibe>=75?"Match that vibe closely: same subgenre, era and mood.":sh.vibe>=40?"Stay close to that vibe, with some variety.":"Surprise the DJ: related but less obvious picks are welcome, as long as they mix.");
+  if(sh.eraLock&&anchor.year) out.push(`Only songs released between ${anchor.year-6} and ${anchor.year+6}.`);
+  if(sh.vocals!=="any") out.push(`Prefer ${sh.vocals==="vocal"?"songs with vocals":"instrumentals"}.`);
+  if(sh.genre==="close") out.push("Stay within the set's genres.");
+  return out.join(" ");
+}
+async function candidates(s,anchor,keys,lo,hi,extra){
+  const have=new Set([...s.tracks.map(sid),...s.rejected]);
+  const list=(await ai(`You help a DJ pick songs. ${extra}
+Current track: "${anchor.title}" by ${anchor.artist}, ${anchor.bpm} BPM, Camelot ${anchor.key}, ${anchor.sub||anchor.genre||"unknown genre"}${anchor.year?", "+anchor.year:""}${anchor.moods&&anchor.moods.length?", feels "+anchor.moods.join("/"):""}.
+${prefsText(s,anchor)}
+Suggest up to 8 real, released songs in Camelot keys [${keys.join(", ")}] at ${lo}-${hi} BPM (half or double time is fine).
+Do not suggest any of: ${[...have].join("; ")||"none"}. Only include songs whose key and tempo you know well.
+Reply with only a JSON array; each item: ${SONG_SCHEMA.slice(0,-1)}, "why": one short sentence on why it fits the vibe}.`)).map(cleanSong).filter(x=>x&&!have.has(sid(x))&&keys.includes(x.key)&&bpmRel(anchor.bpm,x.bpm).pct<=Math.max(8,(hi-lo)/anchor.bpm*100));
+  return list;
+}
+function renderSugg(s,list,anchor,next,insertAt,label,goal){
+  const out=$("#suggOut");
+  const ranked=list.map(x=>{ const a=vibeScore(anchor,x,s,goal), b=next?vibeScore(x,next,s):null;
+    return {x,score:b?(a.score+b.score)/2:a.score,f:a.f,reason:fitReason(anchor,x,a.f,goal)}; }).sort((a,b)=>b.score-a.score).slice(0,6);
+  if(!ranked.length){ out.innerHTML=`<p class="note">No confident matches. Try moving the Vibe fader toward “Surprise me”, or “Allow energy jumps”.</p>`; return; }
+  out.innerHTML=`<p class="note" style="margin-top:10px"><b>${esc(label)}</b></p>`+ranked.map((r,n)=>`<div class="sugg"><span><b>${esc(r.x.title)}</b> · ${esc(r.x.artist)}${r.x.year?` · ${r.x.year}`:""}</span>
+    <span>${bpmBtn(r.x.bpm)} ${keyBtn(r.x.key)} <span class="note">${esc(r.x.sub||r.x.genre)}</span> <span class="lcd vibe">${Math.round(r.score*100)}%</span></span>
+    <span class="bd lcd" aria-label="Fit breakdown">KEY ${dots(r.f.key)} · TEMPO ${dots(r.f.tempo)} · GENRE ${dots(r.f.genre)} · ERA ${dots(r.f.era)} · MOOD ${dots(r.f.mood)}</span>
+    ${r.reason?`<span class="note">${esc(r.reason)}</span>`:""}${r.x.why?`<span class="note">${esc(r.x.why)}</span>`:""}
+    <span class="toggle"><button class="btn small" data-addsugg="${n}">${next?"Insert here":"Add after #"+(insertAt)}</button><button class="link" data-rej="${n}">Not for me</button></span></div>`).join("");
+  out.onclick=e=>{ const a=e.target.closest("[data-addsugg]"), r=e.target.closest("[data-rej]");
+    if(a){ const x=ranked[+a.dataset.addsugg].x; snap(s); x.fromAI=true; x.check=x.check||"unverified"; s.tracks.splice(insertAt,0,x); save(); track("ai_song_added",{bridge:!!next}); a.parentElement.innerHTML=`<span class="note">Added ✓</span>`; drawOrder(s); insertAt++; }
+    if(r){ const x=ranked[+r.dataset.rej].x; s.rejected=[...new Set([...s.rejected,sid(x)])]; save(); track("ai_song_rejected"); r.closest(".sugg").remove(); } };
+}
+async function runSugg(btn,fn){
+  const out=$("#suggOut"); btn&&(btn.disabled=true); const old=btn&&btn.textContent; if(btn) btn.textContent="Thinking…";
+  out.innerHTML=`<p class="note">This can take up to a minute.</p>`;
+  try{ await fn(); }catch(e){ out.innerHTML=`<p class="msg err">Couldn’t reach the AI: ${esc(e.message)}</p>`; }
+  if(btn){ btn.disabled=false; btn.textContent=old; }
+}
+function suggestAfter(s,i){
+  const t=s.tracks[i]; if(!t) return; track("ai_suggest_clicked");
+  const min=Math.max(RULES[s.shape.rule].min,.5), keys=Object.keys(MUSICAL).filter(k=>keyMove(t.key,k).s>=min), goal=energyTarget(s.shape.curve,i+1,Math.max(s.tracks.length,i+2));
+  runSugg($("#suggest"),async()=>{ const list=await candidates(s,t,keys,Math.round(t.bpm*.94),Math.round(t.bpm*1.06),`Energy around ${Math.round(goal)}/5.`);
+    track("ai_tracks_found",{count:list.length}); renderSugg(s,list,t,null,i+1,`After “${t.title}”`,goal); });
+}
+function bridge(s,i){
+  const a=s.tracks[i-1], b=s.tracks[i]; if(!a||!b) return;
+  if(!aiOK) return alert(aiWhy);
+  track("bridge_clicked");
+  let keys=Object.keys(MUSICAL).filter(k=>keyMove(a.key,k).s>=.5&&keyMove(k,b.key).s>=.5); if(!keys.length) keys=Object.keys(MUSICAL).filter(k=>keyMove(a.key,k).s>=.8);
+  const lo=Math.round(Math.min(a.bpm,b.bpm)*.97), hi=Math.round(Math.max(a.bpm,b.bpm)*1.03);
+  $("#aiPanel").scrollIntoView({behavior:"smooth",block:"start"});
+  runSugg(null,async()=>{ const list=await candidates(s,a,keys,lo,hi,`Find a bridge track to play between "${a.title}" (${a.bpm} BPM, ${a.key}) and "${b.title}" (${b.bpm} BPM, ${b.key}); it must mix well out of the first and into the second.`);
+    track("ai_tracks_found",{count:list.length,bridge:true}); renderSugg(s,list,a,b,i,`Bridges from “${a.title}” to “${b.title}”`,null); });
+}
+
+// ---------- learn & about
 function wheel(){
-  let g=""; [["B",118,"#efe8db"],["A",78,"#a39c90"]].forEach(([l,r])=>{ for(let n=1;n<=12;n++){ const a=((n-1)*30-90)*Math.PI/180, x=150+r*Math.cos(a), y=150+r*Math.sin(a), k=n+l;
+  let g=""; [["B",118],["A",78]].forEach(([l,r])=>{ for(let n=1;n<=12;n++){ const a=((n-1)*30-90)*Math.PI/180, x=150+r*Math.cos(a), y=150+r*Math.sin(a), k=n+l;
     g+=`<g data-keyhelp="${k}" style="cursor:pointer" role="button" tabindex="0" aria-label="${k}, ${MUSICAL[k]}"><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="18" fill="${hueOf(k)}" stroke="#000" stroke-width="2"/><text x="${x.toFixed(1)}" y="${(y+4).toFixed(1)}" text-anchor="middle" fill="#000">${k}</text></g>`; }});
   return `<svg viewBox="0 0 300 300" role="img" aria-label="Camelot wheel. Tap a key for details."><circle cx="150" cy="150" r="145" fill="#0d0d0f" stroke="#2b2b32"/>${g}<circle cx="150" cy="150" r="44" fill="#111" stroke="#2b2b32"/><text x="150" y="146" text-anchor="middle" fill="#a77bff">CAMELOT</text><text x="150" y="162" text-anchor="middle" fill="#a39c90">A inner · B outer</text></svg>`;
 }
@@ -498,12 +682,13 @@ function learnPage(){
     <div class="panel"><h3><span class="led green"></span>Mood shift</h3><p>8A ↔ 8B. Same notes, minor ↔ major. Great for changing the feel; try an EQ swap.</p></div>
     <div class="panel"><h3><span class="led amber"></span>Energy jump</h3><p>+2 (8A → 10A) or +7 (8A → 3A). A noticeable lift; keep the blend short, on a drop.</p></div>
     <div class="panel"><h3><span class="led red"></span>Clash</h3><p>Anything else. Melodies may fight, so cut, echo out, or use a drum break.</p></div>
-    <div class="panel"><h3><span class="led amber"></span>BPM &amp; blending</h3><p>Within ±6% you can beatmatch. 32 bars ≈ 60 s at 128 BPM. Bigger gaps: loop, cut, or echo out.</p></div>
+    <div class="panel"><h3><span class="led amber"></span>BPM &amp; blending</h3><p>Within ±6% you can beatmatch. Half or double time (70 ↔ 140) mixes too. 32 bars ≈ 60 s at 128 BPM.</p></div>
+    <div class="panel"><h3><span class="led acc"></span>Vibe match</h3><p>Two tracks can share a key and tempo and still feel wrong. Springboard also weighs subgenre, era and mood, shown as a vibe %.</p></div>
   </div></div>`;
   $("#main").onkeydown=e=>{ if((e.key==="Enter"||e.key===" ")&&e.target.dataset.keyhelp){ e.preventDefault(); showPop(e.target,keyHelp(e.target.dataset.keyhelp)); } };
 }
 function aboutPage(){
-  $("#main").innerHTML=`<div class="hero"><h1>About Springboard</h1></div><div class="panel" style="max-width:640px"><p>Springboard helps DJs build sets that flow. It checks every transition by Camelot key and BPM, explains how to mix it, and suggests real songs to play next.</p><p>Built for NYU Stern’s <i>Building with AI</i>. Read the <a href="../">product page and build log</a>.</p><p class="note">BPM and key values from the AI are estimates. Always check them in your DJ software.</p></div>`;
+  $("#main").innerHTML=`<div class="hero"><h1>About Springboard</h1></div><div class="panel" style="max-width:640px"><p>Springboard helps DJs build sets that flow. It checks every transition by Camelot key, BPM and vibe (subgenre, era, mood), explains how to mix it, and suggests real songs to play next.</p><p>Built for NYU Stern’s <i>Building with AI</i>. Read the <a href="../">product page and build log</a>.</p><p class="note">Sets are saved only in this browser. Use Export to keep a backup. BPM and key values from the AI are estimates; always check them in your DJ software.</p></div>`;
 }
 route();
 </script>
