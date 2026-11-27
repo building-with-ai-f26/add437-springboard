@@ -43,8 +43,10 @@ label{display:block;font-size:.8rem;color:var(--muted);text-transform:uppercase;
 .burger{background:none;border:1px solid var(--line);border-radius:8px;width:44px;height:40px;display:grid;place-items:center}
 .burger span{display:block;width:20px;height:2px;background:var(--ink);box-shadow:0 6px 0 var(--ink),0 -6px 0 var(--ink)}
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:30}
-.side{position:fixed;top:0;right:0;height:100%;width:min(300px,86vw);background:var(--panel);background-image:var(--brush);border-left:1px solid var(--line);z-index:31;padding:20px;transform:translateX(100%);transition:transform .25s}
-.side.open{transform:none}
+.side{position:fixed;top:0;right:0;height:100%;width:min(300px,86vw);transition:transform .25s,visibility .25s;background:var(--panel);background-image:var(--brush);border-left:1px solid var(--line);z-index:31;padding:20px;transform:translateX(100%);transition:transform .25s}
+.side.open{transform:none;visibility:visible}
+.side:not(.open){visibility:hidden}
+html,body{overflow-x:clip}
 .side nav a{display:flex;align-items:center;gap:10px;padding:12px 6px;border-bottom:1px solid var(--line);color:var(--ink);text-decoration:none;font-weight:700}
 .side nav a .led{margin:0}
 .side nav a[aria-current]{color:var(--accent)}
@@ -92,8 +94,10 @@ ol.play{list-style:none;margin:0;padding:0}
 .xfer .win{color:var(--muted)}
 
 /* organize */
-.org{display:grid;grid-template-columns:280px 1fr 320px;gap:18px;align-items:start}
-@media (max-width:1000px){.org{grid-template-columns:1fr}}
+.org{display:grid;grid-template-columns:minmax(300px,1fr) 2fr;grid-template-rows:auto auto 1fr;grid-template-areas:"add order" "shape order" "ai order";gap:18px;align-items:start}
+.a-add{grid-area:add}.a-order{grid-area:order}.a-shape{grid-area:shape}.a-ai{grid-area:ai}
+@media (max-width:1000px){.org{grid-template-columns:1fr;grid-template-rows:none;grid-template-areas:"add" "order" "shape" "ai"}}
+.note.sub{margin:0 0 4px}.note.hint{margin:0 0 6px;font-size:.82rem}
 .org h2{font-size:1.15rem;margin-bottom:6px}
 .orow{display:grid;grid-template-columns:22px 1fr 72px 64px auto;gap:8px;align-items:center;padding:8px 10px;background:var(--panel2);border:1px solid var(--line);border-radius:10px}
 .orow.drag{opacity:.4} .orow.over{border-color:var(--accent)}
@@ -117,6 +121,7 @@ ol.play{list-style:none;margin:0;padding:0}
 #pop ul{margin:6px 0 0;padding-left:18px}
 
 /* floating wheel */
+#fabLabel{position:fixed;right:12px;bottom:84px;z-index:35;width:74px;text-align:center;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--accent);text-shadow:0 0 6px rgba(167,123,255,.5);background:rgba(10,10,12,.85);border-radius:6px;padding:2px 0}
 #fab{position:fixed;right:20px;bottom:20px;z-index:35;width:58px;height:58px;border-radius:50%;border:1px solid var(--accent);background:radial-gradient(circle,#2a2238 0 30%,#111 31% 100%);color:var(--accent);font-size:1.6rem;box-shadow:0 0 14px rgba(167,123,255,.45),0 6px 18px rgba(0,0,0,.6)}
 #dock{position:fixed;right:20px;bottom:90px;z-index:35;width:min(330px,calc(100vw - 40px));max-height:calc(100vh - 130px);overflow:auto;background:#111114;border:1px solid var(--accent);border-radius:14px;padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.7)}
 #dock .dhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
@@ -164,6 +169,7 @@ label.check input{width:auto}
 <div id="wake" hidden role="status"><span class="led acc"></span>Waking up the server… this can take up to a minute.</div>
 <main id="main"></main>
 <div id="pop" hidden role="dialog"></div>
+<span id="fabLabel" hidden aria-hidden="true">Camelot wheel</span>
 <button id="fab" hidden aria-label="Show Camelot wheel" aria-expanded="false" aria-controls="dock">◎</button>
 <section id="dock" hidden aria-label="Camelot wheel"><div class="dhead"><h3 style="font-size:1.05rem">Camelot wheel</h3><button class="btn small" id="dockClose">Hide</button></div><div id="dockWheel"></div><div id="dockInfo"><p class="note" style="margin:6px 0 0">Tap a key to light up where it can go. It stays open while you organize.</p></div></section>
 
@@ -199,6 +205,8 @@ function keyMove(a,b){
   }
   return {s:.1,type:"clash",label:"Key clash"};
 }
+const TEMPOS={tight:{tol:3,name:"Tight (±3%)"},normal:{tol:6,name:"Normal (±6%)"},loose:{tol:10,name:"Loose (±10%)"}};
+const tolOf=sh=>(TEMPOS[(sh&&sh.tempo)||"normal"]||TEMPOS.normal).tol;
 const RULES={strict:{min:.8,name:"Strict Camelot"},boost:{min:.5,name:"Allow energy jumps"},loose:{min:0,name:"Anything goes"}};
 // tempo match, counting half time and double time
 function bpmRel(a,b){
@@ -206,9 +214,9 @@ function bpmRel(a,b){
   return opts.sort((x,y)=>x.pct-y.pct)[0];
 }
 const mixWin=(bpm,bars)=>Math.round(bars*4*60/bpm);
-function transition(p,n,rule){
-  const k=keyMove(p.key,n.key), br=bpmRel(p.bpm,n.bpm), pct=br.pct, keyOk=k.s>=RULES[rule||"strict"].min, tempoOk=pct<=6;
-  let led=keyOk&&tempoOk?"green":(k.s>=.5&&pct<=8)?"amber":"red", tip, bars;
+function transition(p,n,sh){
+  sh=sh||{}; const tol=tolOf(sh), k=keyMove(p.key,n.key), br=bpmRel(p.bpm,n.bpm), pct=br.pct, keyOk=k.s>=RULES[sh.rule||"strict"].min, tempoOk=pct<=tol;
+  let led=keyOk&&tempoOk?"green":(k.s>=.5&&pct<=tol+2)?"amber":"red", tip, bars;
   const ht=br.mode?` Mix it as ${br.mode} time (${n.bpm} ↔ ${p.bpm}).`:"";
   if(!tempoOk){ tip=`Tempo gap of ${pct.toFixed(1)}% is too big to blend. Loop the outro, then echo out or cut on the last beat of a phrase.`; bars=8; }
   else if(k.type==="same"){ tip="Long blend: overlap the tracks and swap the bass on a downbeat."+ht; bars=32; }
@@ -226,7 +234,7 @@ function energyTarget(curve,pos,n){ if(curve==="steady") return 3; if(curve==="w
 const tagsOf=t=>new Set([...(t.moods||[]),...(t.inst||[]),t.vocals||""].filter(Boolean));
 function factors(a,b,s,energyGoal){
   const k=keyMove(a.key,b.key).s, p=bpmRel(a.bpm,b.bpm).pct;
-  const tempo=p<=3?1:p<=6?.8:p<=10?.4:.1;
+  const tol=tolOf(s&&s.shape), tempo=p<=tol/2?1:p<=tol?.8:p<=tol*1.6?.4:.1;
   let genre=.5; if(a.sub&&b.sub&&a.sub===b.sub) genre=1; else if(a.genre&&b.genre) genre=a.genre===b.genre?.7:(a.sub&&b.sub&&a.sub.split(" ").some(w=>b.sub.includes(w))?.5:.15);
   const A=tagsOf(a),B=tagsOf(b); let mood=.5; if(A.size&&B.size){ const inter=[...A].filter(x=>B.has(x)).length; mood=inter/new Set([...A,...B]).size; mood=Math.min(1,mood*1.6); }
   const era=a.year&&b.year?Math.max(0,1-Math.abs(a.year-b.year)/20):.5;
@@ -262,7 +270,7 @@ function demo(){
   return [{id:uid(),title:"Rooftop Warm-up",venue:"Sample set",date:"",vibe:"Sunset disco into house",notes:"Made-up demo tracks. Paste your own songs in Organize set.",
     tracks:[t("Night Shift","Velvet Arcade",120,"8A","disco","nu-disco",2019,2,["warm","groovy"],["strings","bass"],"vocal"),t("Low Tide","Mara Quill",121,"8B","disco","nu-disco",2020,3,["warm","sunny"],["strings","guitar"],"vocal"),t("Glass Hours","Northline",122,"9B","house","deep house",2018,3,["dreamy","warm"],["pads","piano"],"instrumental"),t("Soft Machine","Rhea Lune",123,"9A","house","deep house",2021,3,["dreamy","hypnotic"],["synth","pads"],"vocal"),t("Overpass","Halden",124,"10A","house","french house",2017,4,["groovy","euphoric"],["filtered disco","bass"],"instrumental"),t("Silver Thread","Kite & Copper",125,"10B","house","french house",2019,4,["euphoric","sunny"],["piano","strings"],"vocal"),t("Runway Lights","Sol Vega",126,"12B","house","nu-disco",2022,5,["euphoric","party"],["synth","guitar"],"vocal")]}];
 }
-function ensure(s){ s.shape=Object.assign({rule:"strict",curve:"build",genre:"blend",vibe:60,eraLock:false,vocals:"any"},s.shape||{}); s.rejected=s.rejected||[]; s.tracks=s.tracks||[]; return s; }
+function ensure(s){ s.shape=Object.assign({rule:"strict",curve:"build",tempo:"normal",genre:"blend",vibe:60,eraLock:false,vocals:"any"},s.shape||{}); s.rejected=s.rejected||[]; s.tracks=s.tracks||[]; return s; }
 let sets; try{ sets=JSON.parse(localStorage.getItem(STORE))||demo(); }catch(e){ sets=demo(); }
 sets.forEach(ensure);
 const save=()=>{try{localStorage.setItem(STORE,JSON.stringify(sets))}catch(e){}};
@@ -324,7 +332,7 @@ const keyBtn=k=>`<button class="key" data-keyhelp="${k}" aria-label="Key ${k}, $
 const bpmBtn=b=>`<button class="bpm" data-bpmhelp="${b}" aria-label="${b} BPM. Show tempo help">${b} BPM</button>`;
 
 // ---------- floating Camelot wheel
-function setDock(open){ $("#dock").hidden=!open; $("#fab").setAttribute("aria-expanded",open); if(open&&!$("#dockWheel").innerHTML) $("#dockWheel").innerHTML=wheel(); }
+function setDock(open){ $("#dock").hidden=!open; $("#fabLabel").hidden=open||$("#fab").hidden; $("#fab").setAttribute("aria-expanded",open); if(open&&!$("#dockWheel").innerHTML) $("#dockWheel").innerHTML=wheel(); }
 $("#fab").onclick=()=>{ setDock($("#dock").hidden); track("camelot_wheel_opened"); };
 $("#dockClose").onclick=()=>{ setDock(false); $("#fab").focus(); };
 function dockKey(k){
@@ -339,7 +347,7 @@ function route(){
   hidePop(); setMenu(false);
   const h=location.hash.replace(/^#\/?/,"").split("/");
   document.querySelectorAll("[data-nav]").forEach(a=>a.toggleAttribute("aria-current",a.dataset.nav===(h[0]||"home")||(h[0]==="set"&&a.dataset.nav==="home")));
-  const org=h[0]==="set"&&h[2]==="organize"; $("#fab").hidden=!org; if(!org) setDock(false);
+  const org=h[0]==="set"&&h[2]==="organize"; $("#fab").hidden=!org; $("#fabLabel").hidden=!org; setDock(false);
   if(h[0]==="set"&&getSet(h[1])) return setPage(getSet(h[1]),h[2]==="organize"?"organize":"play");
   if(h[0]==="learn") return learnPage();
   if(h[0]==="about") return aboutPage();
@@ -412,7 +420,7 @@ function playTab(s){
   track("set_viewed",{tracks:s.tracks.length});
   const T=s.tracks;
   if(!T.length){ $("#tabBody").innerHTML=`<div class="panel empty">This set is empty. <a href="#/set/${s.id}/organize">Add songs in Organize set →</a></div>`; return; }
-  const xs=T.slice(1).map((t,i)=>transition(T[i],t,s.shape.rule)), smooth=xs.filter(x=>x.led==="green").length;
+  const xs=T.slice(1).map((t,i)=>transition(T[i],t,s.shape)), smooth=xs.filter(x=>x.led==="green").length;
   $("#tabBody").innerHTML=`${tagBar(s,false)}<p class="note">${T.length} tracks · ${smooth} of ${xs.length} transitions mix smoothly. Tap a key or BPM for help.</p><ol class="play">${T.map((t,i)=>{
     const x=i>0?xs[i-1]:null;
     return (x?`<li class="xfer"><span class="led ${x.led}"></span><b>${x.led==="green"?"Smooth":x.led==="amber"?"Careful":"Risky"}: ${esc(x.k.label)}${x.tempoOk?"":", big tempo jump"}.</b> ${esc(x.tip)}<br><span class="win">Start mixing out of “${esc(T[i-1].title)}” about ${x.bars} bars (≈${x.secs}s) before its end, bringing “${esc(t.title)}” in on the first beat of its phrase.</span></li>`:"")+
@@ -437,7 +445,7 @@ function tagBar(s,edit){
 function organizeTab(s){
   const sh=s.shape;
   $("#tabBody").innerHTML=`<div class="org">
-  <section class="panel"><h2>Add songs</h2>
+  <section class="panel a-add"><h2>Add songs</h2>
     <label for="paste">Paste a list</label>
     <textarea id="paste" placeholder="Title - Artist&#10;Title - Artist, 124, 8A, house"></textarea>
     <p class="note">One song per line. BPM, key and genre are optional${aiOK?"; the AI fills in what’s missing, then checks every song against music sites online.":". Without the AI, include BPM and key."}</p>
@@ -447,28 +455,33 @@ function organizeTab(s){
     ${aiOK?"":`<p class="note">${esc(aiWhy)}</p>`}
     <p class="msg" id="addMsg" aria-live="polite"></p>
   </section>
-  <section><div class="panel"><div class="ohead"><h2>Set order</h2><span class="toggle"><button class="btn small" id="undoBtn" ${(undoStack[s.id]||[]).length?"":"disabled"} title="Undo (Cmd/Ctrl+Z)">↶ Undo</button><button class="btn small" id="verifyAll" ${aiOK&&s.tracks.length?"":"disabled"}>Check all online</button></span></div>
-    <p class="note">Drag the ≡ handle or use the arrows. 🔒 keeps a track in its spot when you auto-order. Click a key box for help, or open the floating Camelot wheel (bottom right).</p><div id="order"></div></div></section>
-  <section>
-    <div class="panel tool"><h2>Set vibe</h2><p class="note" style="margin:0 0 6px">${s.tagsEdited?"Your tags.":"Picked up from your songs."} Suggestions follow these tags.</p><div id="tagWrap">${tagBar(s,true)}</div></div>
-    <div class="panel tool"><h2>Shape the set</h2><div class="knobs">
-      <label for="rule">Key rule</label><select id="rule">${Object.entries(RULES).map(([k,v])=>`<option value="${k}" ${sh.rule===k?"selected":""}>${v.name}</option>`).join("")}</select>
-      <label for="curve">Energy curve</label><select id="curve"><option value="build" ${sh.curve==="build"?"selected":""}>Build up</option><option value="steady" ${sh.curve==="steady"?"selected":""}>Keep it steady</option><option value="wave" ${sh.curve==="wave"?"selected":""}>Peaks and dips</option></select>
-      <label for="vibeR">Vibe: <span id="vibeLbl"></span></label><input type="range" id="vibeR" min="0" max="100" value="${sh.vibe}" class="fader">
+  <section class="a-order"><div class="panel"><div class="ohead"><h2>Set order</h2><span class="toggle"><button class="btn small" id="undoBtn" ${(undoStack[s.id]||[]).length?"":"disabled"} title="Undo (Cmd/Ctrl+Z)">↶ Undo</button><button class="btn small" id="verifyAll" ${aiOK&&s.tracks.length?"":"disabled"}>Check all online</button></span></div>
+    <p class="note">Drag the ≡ handle or use the arrows. 🔒 keeps a track in its spot when you auto-order. Click a key box for help, or open the Camelot wheel (bottom right).</p><div id="order"></div></div></section>
+  <section class="panel a-shape"><h2>Shape the set</h2><p class="note sub">Helps Springboard recommend better songs and order your set.</p>
+    <div class="knobs">
+      <label for="rule">Key rule</label><p class="note hint" id="ruleHint">How big a key jump you’ll allow between songs.</p>
+      <select id="rule" aria-describedby="ruleHint">${Object.entries(RULES).map(([k,v])=>`<option value="${k}" ${sh.rule===k?"selected":""}>${v.name}</option>`).join("")}</select>
+      <label for="curve">Energy curve</label><p class="note hint" id="curveHint">How the set’s intensity moves from start to finish.</p>
+      <select id="curve" aria-describedby="curveHint"><option value="build" ${sh.curve==="build"?"selected":""}>Build up</option><option value="steady" ${sh.curve==="steady"?"selected":""}>Keep it steady</option><option value="wave" ${sh.curve==="wave"?"selected":""}>Peaks and dips</option></select>
+      <label for="tempo">Tempo</label><p class="note hint" id="tempoHint">How big a BPM jump you’ll allow between songs.</p>
+      <select id="tempo" aria-describedby="tempoHint">${Object.entries(TEMPOS).map(([k,v])=>`<option value="${k}" ${sh.tempo===k?"selected":""}>${v.name}</option>`).join("")}</select>
+      <label for="vibeR">Vibe: <span id="vibeLbl"></span></label><p class="note hint" id="vibeHint">How closely suggestions should match your songs’ subgenre, era and mood.</p>
+      <input type="range" id="vibeR" min="0" max="100" value="${sh.vibe}" class="fader" aria-describedby="vibeHint">
       <div class="rangeends note"><span>Surprise me</span><span>Match closely</span></div>
       <label class="check"><input type="checkbox" id="eraLock" ${sh.eraLock?"checked":""}> Stay in this era</label>
       <label for="vocals">Vocals</label><select id="vocals"><option value="any" ${sh.vocals==="any"?"selected":""}>Any</option><option value="vocal" ${sh.vocals==="vocal"?"selected":""}>Prefer vocals</option><option value="instrumental" ${sh.vocals==="instrumental"?"selected":""}>Prefer instrumentals</option></select>
-    </div><button class="btn" id="autoOrder" style="margin-top:12px;width:100%">Auto-order my set</button><p class="note">Keeps your opener and any 🔒 locked tracks in place.</p></div>
-    <div class="panel tool" id="aiPanel"><h2>AI next song</h2>
+      <label>Vibe tags</label><p class="note hint">${s.tagsEdited?"Your tags.":"Picked up from your songs."} Suggestions follow these.</p><div id="tagWrap">${tagBar(s,true)}</div>
+    </div><button class="btn" id="autoOrder" style="margin-top:12px;width:100%">Auto-order my set</button><p class="note">Keeps your opener and any 🔒 locked tracks in place.</p></section>
+  <section class="panel a-ai" id="aiPanel"><h2>AI next song</h2>
       <label for="after">Suggest songs after</label><select id="after">${afterOpts(s)}</select>
       <button class="btn primary" id="suggest" style="margin-top:10px;width:100%" ${aiOK&&s.tracks.length?"":"disabled"}>Suggest songs</button>
-      <p class="note">${aiOK?"Ranked by key, tempo, subgenre, era, mood and your shape settings. Check final picks in your DJ software.":esc(aiWhy)}</p>
-      <div id="suggOut" aria-live="polite"></div></div>
-  </section></div>`;
+      <p class="note">${aiOK?"Uses your Shape the set settings. Check final picks in your DJ software.":esc(aiWhy)}</p>
+      <div id="suggOut" aria-live="polite"></div></section></div>`;
   drawOrder(s);
   const vibeLbl=()=>{ $("#vibeLbl").textContent=sh.vibe>=75?"match closely":sh.vibe>=40?"balanced":"surprise me"; }; vibeLbl();
   $("#rule").onchange=e=>{ sh.rule=e.target.value; save(); drawOrder(s); };
   $("#curve").onchange=e=>{ sh.curve=e.target.value; save(); drawOrder(s); };
+  $("#tempo").onchange=e=>{ sh.tempo=e.target.value; save(); drawOrder(s); };
   $("#vibeR").oninput=e=>{ sh.vibe=+e.target.value; vibeLbl(); save(); };
   $("#vibeR").onchange=()=>drawOrder(s);
   $("#eraLock").onchange=e=>{ sh.eraLock=e.target.checked; save(); drawOrder(s); };
@@ -500,7 +513,7 @@ function drawOrder(s){
   if(!T.length){ box.innerHTML=`<p class="empty">No songs yet. Add some on the left.</p>`; return; }
   box.innerHTML=T.map((t,i)=>{
     let j="";
-    if(i>0){ const p=T[i-1], x=transition(p,t,s.shape.rule), why=[], v=Math.round(vibeScore(p,t,s).score*100);
+    if(i>0){ const p=T[i-1], x=transition(p,t,s.shape), why=[], v=Math.round(vibeScore(p,t,s).score*100);
       if(!x.keyOk) why.push(`key jump ${p.key} → ${t.key}`); if(!x.tempoOk) why.push(`${x.pct.toFixed(1)}% BPM jump`);
       j=why.length?`<div class="jump bad"><span class="led red"></span>Too big a ${why.join(" and ")} · vibe ${v}% <button class="link" data-bridge="${i}">Find a bridge</button></div>`
         :`<div class="jump ok"><span class="led green"></span>${esc(x.k.label)}${x.half?` (${x.half} time)`:""}, mixes smoothly · vibe ${v}%</div>`; }
@@ -543,7 +556,7 @@ function autoOrder(s){
   for(let pos=0;pos<n;pos++){
     if(fixed.has(pos)){ out.push(fixed.get(pos)); continue; }
     const p=out[pos-1], next=fixed.get(pos+1), goal=energyTarget(s.shape.curve,pos,n), min=RULES[s.shape.rule].min;
-    const score=t=>{ let v=vibeScore(p,t,s,goal).score+(keyMove(p.key,t.key).s>=min?.3:0)-(bpmRel(p.bpm,t.bpm).pct>6?.3:0);
+    const score=t=>{ let v=vibeScore(p,t,s,goal).score+(keyMove(p.key,t.key).s>=min?.3:0)-(bpmRel(p.bpm,t.bpm).pct>tolOf(s.shape)?.3:0);
       if(next) v+=.5*vibeScore(t,next,s).score; return v; };
     left.sort((a,b)=>score(b)-score(a)); out.push(left.shift());
   }
@@ -654,7 +667,8 @@ async function runSugg(btn,fn){
 function suggestAfter(s,i){
   const t=s.tracks[i]; if(!t) return; track("ai_suggest_clicked");
   const min=Math.max(RULES[s.shape.rule].min,.5), keys=Object.keys(MUSICAL).filter(k=>keyMove(t.key,k).s>=min), goal=energyTarget(s.shape.curve,i+1,Math.max(s.tracks.length,i+2));
-  runSugg($("#suggest"),async()=>{ const list=await candidates(s,t,keys,Math.round(t.bpm*.94),Math.round(t.bpm*1.06),`Energy around ${Math.round(goal)}/5.`);
+  const tol=tolOf(s.shape)/100;
+  runSugg($("#suggest"),async()=>{ const list=await candidates(s,t,keys,Math.round(t.bpm*(1-tol)),Math.round(t.bpm*(1+tol)),`Energy around ${Math.round(goal)}/5.`);
     track("ai_tracks_found",{count:list.length}); renderSugg(s,list,t,null,i+1,`After “${t.title}”`,goal); });
 }
 function bridge(s,i){
